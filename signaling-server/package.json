@@ -1,0 +1,12 @@
+{
+  "name": "couple-chat-signaling",
+  "version": "1.0.0",
+  "description": "WebRTC signaling server for couple chat app",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.15.1"
+  }
+}

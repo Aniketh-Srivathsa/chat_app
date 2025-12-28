@@ -1,0 +1,39 @@
+name: couple_chat
+description: Private couple chat app
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.6
+
+  # WebRTC (Flutter 3 + Android embedding v2 compatible)
+  flutter_webrtc: ^1.2.1
+
+  # WebSocket signaling (web ^1.x compatible)
+  web_socket_channel: ^3.0.3
+
+  # Local storage
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Encryption
+  encrypt: ^5.0.3
+
+  # UUID generation
+  uuid: ^4.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
