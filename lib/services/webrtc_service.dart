@@ -16,8 +16,7 @@ class WebRTCService {
   bool _reconnectScheduled = false; // ✅ REQUIRED
 
 
-  late bool _lastIsCaller;
-
+  bool? _lastIsCaller;
   final SignalingService signaling;
   final String roomId;
   final Function(String message) onMessage;
@@ -180,7 +179,7 @@ class WebRTCService {
     attemptReconnect();
   }
 
-  Future<void> attemptReconnect() async {
+ Future<void> attemptReconnect() async {
   if (_isReconnecting || _reconnectScheduled) {
     debugPrint("⏸ Reconnect already in progress — skipping");
     return;
@@ -199,12 +198,19 @@ class WebRTCService {
   debugPrint("🔄 FULL WebRTC reconnect started");
 
   try {
+    // 🔥 Prevent crash if init() never ran
+    if (_lastIsCaller == null) {
+      debugPrint("⚠️ Reconnect skipped: role not initialized");
+      _isReconnecting = false;
+      return;
+    }
+
     dispose();
 
-    await init(_lastIsCaller);
+    await init(_lastIsCaller!);
 
     // 🔥 ONLY CALLER CREATES OFFER
-    if (_lastIsCaller) {
+    if (_lastIsCaller!) {
       await createOffer();
     }
   } catch (e) {

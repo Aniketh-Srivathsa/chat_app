@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
-
+import '../core/app_config.dart';
 class SignalingService {
   late WebSocketChannel _channel;
   bool _connected = false;
@@ -10,8 +10,8 @@ class SignalingService {
     required Function(String type, dynamic payload) onMessage,
   }) {
     _channel = WebSocketChannel.connect(
-      Uri.parse('ws://192.168.29.113:9090'),
-    );
+  Uri.parse(AppConfig.signalingServer),
+);
 
     _connected = true;
 
