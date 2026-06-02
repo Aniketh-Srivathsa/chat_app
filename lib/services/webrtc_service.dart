@@ -51,13 +51,17 @@ class WebRTCService {
       debugPrint("🌐 ICE STATE: $state");
 
       if (state ==
-              RTCIceConnectionState
-                  .RTCIceConnectionStateDisconnected ||
-          state ==
-              RTCIceConnectionState
-                  .RTCIceConnectionStateFailed) {
-        _handleIceFailure();
+        RTCIceConnectionState
+            .RTCIceConnectionStateDisconnected) {
+        debugPrint("⚠️ ICE temporarily disconnected");
       }
+
+      if (state ==
+        RTCIceConnectionState
+            .RTCIceConnectionStateFailed) {
+            debugPrint("❌ ICE FAILED");
+            _handleIceFailure();
+          }
 
       if (state ==
               RTCIceConnectionState
@@ -205,7 +209,7 @@ class WebRTCService {
       return;
     }
 
-    dispose();
+    await dispose();
 
     await init(_lastIsCaller!);
 
@@ -223,17 +227,26 @@ class WebRTCService {
 
   // ================= CLEANUP =================
 
-  void dispose() {
-    debugPrint("❌ Disposing WebRTC");
+  Future<void> dispose() async {
+  debugPrint("❌ Disposing WebRTC");
 
-    _initialized = false;
-    isConnected = false;
-    _channelOpen = false;
+  _initialized = false;
+  isConnected = false;
+  _channelOpen = false;
 
-    _dataChannel?.close();
-    _peerConnection?.close();
-
-    _dataChannel = null;
-    _peerConnection = null;
+  try {
+    await _dataChannel?.close();
+  } catch (e) {
+    debugPrint("⚠️ DataChannel close ignored: $e");
   }
+
+  try {
+    await _peerConnection?.close();
+  } catch (e) {
+    debugPrint("⚠️ PeerConnection close ignored: $e");
+  }
+
+  _dataChannel = null;
+  _peerConnection = null;
+}
 }

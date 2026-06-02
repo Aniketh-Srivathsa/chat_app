@@ -71,17 +71,7 @@ class _ChatScreenState extends State<ChatScreen>
         debugPrint("📡 Network disconnected");
       },
       onConnected: () {
-        debugPrint("📶 Network connected");
-
-        if (!webrtc.isConnected) {
-          debugPrint("🔄 Network restored → reconnecting WebRTC");
-          webrtc.attemptReconnect();
-
-          // 🔥 FORCE FLUSH after reconnect delay
-          Future.delayed(const Duration(seconds: 2), () {
-            _tryFlushQueueSafely();
-          });
-        }
+  debugPrint("📶 Network connected");
       },
     );
 
