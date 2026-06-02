@@ -1,54 +1,119 @@
 const WebSocket = require("ws");
 
 const PORT = process.env.PORT || 9090;
+
 const wss = new WebSocket.Server({ port: PORT });
 
-const rooms = {}; // roomId -> [client1, client2]
+const rooms = {};
+
+console.log(`🚀 Signaling server running on port ${PORT}`);
 
 wss.on("connection", (ws) => {
+  console.log("🔗 New client connected");
+
   ws.on("message", (message) => {
-    const data = JSON.parse(message);
+    try {
+      const data = JSON.parse(message);
 
-    const { type, roomId, payload } = data;
+      const { type, roomId, payload } = data;
 
-    // Join room
-    if (type === "join") {
-      if (!rooms[roomId]) rooms[roomId] = [];
-      rooms[roomId].push(ws);
-      ws.roomId = roomId;
+      console.log(
+        `📨 Received: ${type} | Room: ${roomId || "none"}`
+      );
 
-      console.log(`Client joined room: ${roomId}`);
+      // JOIN ROOM
+      if (type === "join") {
+        if (!roomId) return;
 
-      if (rooms[roomId].length === 2) {
-        rooms[roomId].forEach((client) => {
-          client.send(JSON.stringify({ type: "ready" }));
-        });
-      }
-    }
-
-    // Relay signaling messages
-    if (["offer", "answer", "ice"].includes(type)) {
-      const peers = rooms[roomId] || [];
-      peers.forEach((client) => {
-        if (client !== ws && client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type, payload }));
+        if (!rooms[roomId]) {
+          rooms[roomId] = [];
         }
-      });
+
+        // Prevent duplicate joins
+        if (!rooms[roomId].includes(ws)) {
+          rooms[roomId].push(ws);
+        }
+
+        ws.roomId = roomId;
+
+        console.log(
+          `👤 Client joined room ${roomId} | Count: ${rooms[roomId].length}`
+        );
+
+        // Notify when two peers are present
+        if (rooms[roomId].length === 2) {
+          console.log(`✅ Room ${roomId} is READY`);
+
+          rooms[roomId].forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(
+                JSON.stringify({
+                  type: "ready",
+                  payload: {},
+                })
+              );
+            }
+          });
+        }
+
+        return;
+      }
+
+      // RELAY OFFER / ANSWER / ICE
+      if (["offer", "answer", "ice"].includes(type)) {
+        const peers = rooms[roomId] || [];
+
+        console.log(
+          `🔄 Relaying ${type} to ${
+            Math.max(peers.length - 1, 0)
+          } peer(s)`
+        );
+
+        peers.forEach((client) => {
+          if (
+            client !== ws &&
+            client.readyState === WebSocket.OPEN
+          ) {
+            client.send(
+              JSON.stringify({
+                type,
+                payload,
+              })
+            );
+          }
+        });
+
+        return;
+      }
+    } catch (e) {
+      console.error("❌ Message parsing error:", e);
     }
   });
 
   ws.on("close", () => {
-    const roomId = ws.roomId;
-    if (!roomId) return;
+    console.log("🔌 Client disconnected");
 
-    rooms[roomId] = rooms[roomId].filter((client) => client !== ws);
+    const roomId = ws.roomId;
+
+    if (!roomId || !rooms[roomId]) {
+      return;
+    }
+
+    rooms[roomId] = rooms[roomId].filter(
+      (client) => client !== ws
+    );
+
+    console.log(
+      `🚪 Client left room ${roomId} | Remaining: ${rooms[roomId].length}`
+    );
 
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
+      console.log(`🗑️ Deleted empty room ${roomId}`);
     }
+  });
 
-    console.log(`Client left room: ${roomId}`);
+  ws.on("error", (err) => {
+    console.error("❌ WebSocket error:", err);
   });
 });
-
-console.log(`🚀 Signaling server running on port ${PORT}`);
