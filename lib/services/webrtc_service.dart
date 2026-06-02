@@ -16,8 +16,7 @@ class WebRTCService {
   bool _reconnectScheduled = false; // ✅ REQUIRED
 
 
-  late bool _lastIsCaller;
-
+  bool? _lastIsCaller;
   final SignalingService signaling;
   final String roomId;
   final Function(String message) onMessage;
@@ -52,13 +51,17 @@ class WebRTCService {
       debugPrint("🌐 ICE STATE: $state");
 
       if (state ==
-              RTCIceConnectionState
-                  .RTCIceConnectionStateDisconnected ||
-          state ==
-              RTCIceConnectionState
-                  .RTCIceConnectionStateFailed) {
-        _handleIceFailure();
+        RTCIceConnectionState
+            .RTCIceConnectionStateDisconnected) {
+        debugPrint("⚠️ ICE temporarily disconnected");
       }
+
+      if (state ==
+        RTCIceConnectionState
+            .RTCIceConnectionStateFailed) {
+            debugPrint("❌ ICE FAILED");
+            _handleIceFailure();
+          }
 
       if (state ==
               RTCIceConnectionState
@@ -180,7 +183,7 @@ class WebRTCService {
     attemptReconnect();
   }
 
-  Future<void> attemptReconnect() async {
+ Future<void> attemptReconnect() async {
   if (_isReconnecting || _reconnectScheduled) {
     debugPrint("⏸ Reconnect already in progress — skipping");
     return;
@@ -199,12 +202,19 @@ class WebRTCService {
   debugPrint("🔄 FULL WebRTC reconnect started");
 
   try {
-    dispose();
+    // 🔥 Prevent crash if init() never ran
+    if (_lastIsCaller == null) {
+      debugPrint("⚠️ Reconnect skipped: role not initialized");
+      _isReconnecting = false;
+      return;
+    }
 
-    await init(_lastIsCaller);
+    await dispose();
+
+    await init(_lastIsCaller!);
 
     // 🔥 ONLY CALLER CREATES OFFER
-    if (_lastIsCaller) {
+    if (_lastIsCaller!) {
       await createOffer();
     }
   } catch (e) {
@@ -217,17 +227,26 @@ class WebRTCService {
 
   // ================= CLEANUP =================
 
-  void dispose() {
-    debugPrint("❌ Disposing WebRTC");
+  Future<void> dispose() async {
+  debugPrint("❌ Disposing WebRTC");
 
-    _initialized = false;
-    isConnected = false;
-    _channelOpen = false;
+  _initialized = false;
+  isConnected = false;
+  _channelOpen = false;
 
-    _dataChannel?.close();
-    _peerConnection?.close();
-
-    _dataChannel = null;
-    _peerConnection = null;
+  try {
+    await _dataChannel?.close();
+  } catch (e) {
+    debugPrint("⚠️ DataChannel close ignored: $e");
   }
+
+  try {
+    await _peerConnection?.close();
+  } catch (e) {
+    debugPrint("⚠️ PeerConnection close ignored: $e");
+  }
+
+  _dataChannel = null;
+  _peerConnection = null;
+}
 }

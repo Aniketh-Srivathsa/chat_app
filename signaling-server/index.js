@@ -1,6 +1,7 @@
 const WebSocket = require("ws");
 
-const wss = new WebSocket.Server({ port: 9090 });
+const PORT = process.env.PORT || 9090;
+const wss = new WebSocket.Server({ port: PORT });
 
 const rooms = {}; // roomId -> [client1, client2]
 
@@ -50,4 +51,4 @@ wss.on("connection", (ws) => {
   });
 });
 
-console.log("🚀 Signaling server running on ws://localhost:9090");
+console.log(`🚀 Signaling server running on port ${PORT}`);
