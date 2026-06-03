@@ -67,6 +67,8 @@ class WebRTCService {
         RTCIceConnectionState
             .RTCIceConnectionStateFailed) {
             debugPrint("❌ ICE FAILED");
+              _handleIceFailure();
+
           }
 
       if (state ==
