@@ -42,10 +42,17 @@ class WebRTCService {
     _peerConnection = await createPeerConnection(rtcConfiguration);
 
     _peerConnection!.onIceCandidate = (candidate) {
-      if (candidate != null) {
-        signaling.send('ice', roomId, candidate.toMap());
-      }
-    };
+  if (candidate != null) {
+    debugPrint("📤 SENDING ICE");
+    debugPrint(candidate.candidate);
+
+    signaling.send(
+      'ice',
+      roomId,
+      candidate.toMap(),
+    );
+  }
+};
 
     _peerConnection!.onIceConnectionState = (state) {
       debugPrint("🌐 ICE STATE: $state");
@@ -60,7 +67,6 @@ class WebRTCService {
         RTCIceConnectionState
             .RTCIceConnectionStateFailed) {
             debugPrint("❌ ICE FAILED");
-            _handleIceFailure();
           }
 
       if (state ==
@@ -126,36 +132,56 @@ class WebRTCService {
   }
 
   Future<void> handleOffer(Map<String, dynamic> offer) async {
-    if (_peerConnection == null) return;
+  debugPrint("📥 OFFER RECEIVED");
 
-    await _peerConnection!.setRemoteDescription(
-      RTCSessionDescription(offer['sdp'], offer['type']),
-    );
+  if (_peerConnection == null) return;
 
-    final answer = await _peerConnection!.createAnswer();
-    await _peerConnection!.setLocalDescription(answer);
-    signaling.send('answer', roomId, answer.toMap());
-  }
+  await _peerConnection!.setRemoteDescription(
+    RTCSessionDescription(offer['sdp'], offer['type']),
+  );
+
+  final answer = await _peerConnection!.createAnswer();
+  await _peerConnection!.setLocalDescription(answer);
+
+  debugPrint("📤 SENDING ANSWER");
+
+  signaling.send('answer', roomId, answer.toMap());
+}
 
   Future<void> handleAnswer(Map<String, dynamic> answer) async {
-    if (_peerConnection == null) return;
+  debugPrint("📥 ANSWER RECEIVED");
 
-    await _peerConnection!.setRemoteDescription(
-      RTCSessionDescription(answer['sdp'], answer['type']),
-    );
+  if (_peerConnection == null) return;
+
+  await _peerConnection!.setRemoteDescription(
+    RTCSessionDescription(answer['sdp'], answer['type']),
+  );
+
+  debugPrint("✅ REMOTE DESCRIPTION SET");
+}
+
+  void handleIce(Map<String, dynamic> ice) async {
+  if (_peerConnection == null) {
+    debugPrint("❌ PeerConnection is null");
+    return;
   }
 
-  void handleIce(Map<String, dynamic> ice) {
-    if (_peerConnection == null) return;
+  debugPrint("📥 RECEIVED ICE");
 
-    _peerConnection!.addCandidate(
+  try {
+    await _peerConnection!.addCandidate(
       RTCIceCandidate(
         ice['candidate'],
         ice['sdpMid'],
         ice['sdpMLineIndex'],
       ),
     );
+
+    debugPrint("✅ ICE ADDED SUCCESSFULLY");
+  } catch (e) {
+    debugPrint("❌ ICE ADD FAILED: $e");
   }
+}
 
   // ================= SEND MESSAGE =================
 
