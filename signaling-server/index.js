@@ -8,8 +8,33 @@ const rooms = {};
 
 console.log(`🚀 Signaling server running on port ${PORT}`);
 
+// ================= HEARTBEAT =================
+
+function heartbeat() {
+  this.isAlive = true;
+}
+
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.log("💀 Removing dead websocket");
+      return ws.terminate();
+    }
+
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+// ================= CONNECTION =================
+
 wss.on("connection", (ws) => {
   console.log("🔗 New client connected");
+
+  ws.isAlive = true;
+  ws.on("pong", heartbeat);
+
+  // ================= MESSAGE =================
 
   ws.on("message", (message) => {
     try {
@@ -21,7 +46,8 @@ wss.on("connection", (ws) => {
         `📨 Received: ${type} | Room: ${roomId || "none"}`
       );
 
-      // JOIN ROOM
+      // ================= JOIN ROOM =================
+
       if (type === "join") {
         if (!roomId) return;
 
@@ -29,7 +55,28 @@ wss.on("connection", (ws) => {
           rooms[roomId] = [];
         }
 
-        // Prevent duplicate joins
+        // Remove dead sockets first
+        rooms[roomId] = rooms[roomId].filter(
+          (client) =>
+            client.readyState === WebSocket.OPEN
+        );
+
+        // Room limit = 2 users
+        if (rooms[roomId].length >= 2) {
+          console.log(
+            `⚠️ Room ${roomId} already full`
+          );
+
+          ws.send(
+            JSON.stringify({
+              type: "room_full",
+              payload: {},
+            })
+          );
+
+          return;
+        }
+
         if (!rooms[roomId].includes(ws)) {
           rooms[roomId].push(ws);
         }
@@ -40,12 +87,14 @@ wss.on("connection", (ws) => {
           `👤 Client joined room ${roomId} | Count: ${rooms[roomId].length}`
         );
 
-        // Notify when two peers are present
+        // Room ready when exactly 2 peers
         if (rooms[roomId].length === 2) {
           console.log(`✅ Room ${roomId} is READY`);
 
           rooms[roomId].forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (
+              client.readyState === WebSocket.OPEN
+            ) {
               client.send(
                 JSON.stringify({
                   type: "ready",
@@ -59,8 +108,11 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      // RELAY OFFER / ANSWER / ICE
-      if (["offer", "answer", "ice"].includes(type)) {
+      // ================= RELAY =================
+
+      if (
+        ["offer", "answer", "ice"].includes(type)
+      ) {
         const peers = rooms[roomId] || [];
 
         console.log(
@@ -86,9 +138,14 @@ wss.on("connection", (ws) => {
         return;
       }
     } catch (e) {
-      console.error("❌ Message parsing error:", e);
+      console.error(
+        "❌ Message parsing error:",
+        e
+      );
     }
   });
+
+  // ================= DISCONNECT =================
 
   ws.on("close", () => {
     console.log("🔌 Client disconnected");
@@ -109,11 +166,25 @@ wss.on("connection", (ws) => {
 
     if (rooms[roomId].length === 0) {
       delete rooms[roomId];
-      console.log(`🗑️ Deleted empty room ${roomId}`);
+
+      console.log(
+        `🗑️ Deleted empty room ${roomId}`
+      );
     }
   });
 
+  // ================= ERROR =================
+
   ws.on("error", (err) => {
-    console.error("❌ WebSocket error:", err);
+    console.error(
+      "❌ WebSocket error:",
+      err
+    );
   });
+});
+
+// ================= SERVER SHUTDOWN =================
+
+wss.on("close", () => {
+  clearInterval(interval);
 });
