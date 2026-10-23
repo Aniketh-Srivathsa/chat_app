@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/local_store.dart';
 import '../services/network_service.dart';
 import '../services/secure_session_service.dart';
 import '../services/signaling_service.dart';
@@ -34,6 +35,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool channelReady = false;
   bool _peerPresent = false;
   bool _networkWasDisconnected = false;
+  late final Future<void> _historyLoad;
 
   bool get _isCaller => widget.localUserId.compareTo(widget.peerUserId) < 0;
   bool get _secureAndVerified =>
@@ -43,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     webrtc = _createWebRtc();
+    _historyLoad = _loadHistory();
     networkService = NetworkService()
       ..startListening(
         onDisconnected: () {
@@ -61,6 +64,22 @@ class _ChatScreenState extends State<ChatScreen> {
       userId: widget.localUserId,
       onMessage: _handleSignal,
     );
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final stored = await LocalStore.loadChatMessages(
+        localUserId: widget.localUserId,
+        conversationId: widget.conversationId,
+      );
+      if (!mounted) return;
+      setState(() {
+        messages.addAll(stored.map((message) =>
+            '${message.senderId == widget.localUserId ? 'Me' : 'Peer'}: ${message.text}'));
+      });
+    } catch (error) {
+      debugPrint('Could not load local chat history: $error');
+    }
   }
 
   WebRTCService _createWebRtc() => WebRTCService(
@@ -153,6 +172,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _receiveCiphertext(String ciphertext) async {
     try {
       final plaintext = await secureSession!.decrypt(ciphertext);
+      await _historyLoad;
+      await LocalStore.saveChatMessage(
+        localUserId: widget.localUserId,
+        conversationId: widget.conversationId,
+        senderId: widget.peerUserId,
+        text: plaintext,
+      );
       if (!mounted) return;
       setState(() => messages.add('Peer: $plaintext'));
     } catch (error) {
@@ -184,12 +210,19 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendOrQueue(String plaintext) async {
+    await _historyLoad;
     if (_secureAndVerified && webrtc.isConnected && channelReady) {
       final ciphertext = await secureSession!.encrypt(plaintext);
       webrtc.sendMessage(ciphertext);
     } else {
       _outgoingQueue.add(plaintext);
     }
+    await LocalStore.saveChatMessage(
+      localUserId: widget.localUserId,
+      conversationId: widget.conversationId,
+      senderId: widget.localUserId,
+      text: plaintext,
+    );
     if (mounted) setState(() => messages.add('Me: $plaintext'));
   }
 

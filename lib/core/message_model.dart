@@ -1,5 +1,38 @@
 import 'message_type.dart';
 
+class ChatHistoryMessage {
+  final String id;
+  final String conversationId;
+  final String senderId;
+  final String text;
+  final int timestamp;
+
+  const ChatHistoryMessage({
+    required this.id,
+    required this.conversationId,
+    required this.senderId,
+    required this.text,
+    required this.timestamp,
+  });
+
+  factory ChatHistoryMessage.fromJson(Map<String, dynamic> json) =>
+      ChatHistoryMessage(
+        id: json['id'] as String,
+        conversationId: json['conversationId'] as String,
+        senderId: json['senderId'] as String,
+        text: json['text'] as String,
+        timestamp: json['timestamp'] as int,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'conversationId': conversationId,
+        'senderId': senderId,
+        'text': text,
+        'timestamp': timestamp,
+      };
+}
+
 class ChatMessage {
   final String id;
   final MessageType type;
