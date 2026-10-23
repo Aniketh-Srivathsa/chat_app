@@ -1,4 +1,5 @@
 const WebSocket = require("ws");
+const { randomUUID } = require("crypto");
 
 const PORT = process.env.PORT || 9090;
 
@@ -52,17 +53,29 @@ wss.on("connection", (ws) => {
         if (!roomId) return;
 
         if (!rooms[roomId]) {
-          rooms[roomId] = [];
+          rooms[roomId] = { peers: [], sessionId: null };
+        }
+        const room = rooms[roomId];
+        ws.userId = data.userId;
+
+        // One active device per prototype identity. Replace a stale socket
+        // when that participant reconnects instead of leaving the room full.
+        for (const previous of room.peers) {
+          if (previous !== ws && previous.userId === ws.userId) {
+            room.peers = room.peers.filter((peer) => peer !== previous);
+            previous.replaced = true;
+            previous.close();
+          }
         }
 
         // Remove dead sockets first
-        rooms[roomId] = rooms[roomId].filter(
+        room.peers = room.peers.filter(
           (client) =>
             client.readyState === WebSocket.OPEN
         );
 
         // Room limit = 2 users
-        if (rooms[roomId].length >= 2) {
+        if (room.peers.length >= 2 && !room.peers.includes(ws)) {
           console.log(
             `⚠️ Room ${roomId} already full`
           );
@@ -77,28 +90,31 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        if (!rooms[roomId].includes(ws)) {
-          rooms[roomId].push(ws);
+        if (!room.peers.includes(ws)) {
+          room.peers.push(ws);
         }
 
         ws.roomId = roomId;
 
         console.log(
-          `👤 Client joined room ${roomId} | Count: ${rooms[roomId].length}`
+          `👤 ${ws.userId || "client"} joined room ${roomId} | Count: ${room.peers.length}`
         );
 
         // Room ready when exactly 2 peers
-        if (rooms[roomId].length === 2) {
+        if (room.peers.length === 2) {
           console.log(`✅ Room ${roomId} is READY`);
-
-          rooms[roomId].forEach((client) => {
+          room.sessionId = randomUUID();
+          room.peers.forEach((client) => {
             if (
               client.readyState === WebSocket.OPEN
             ) {
               client.send(
                 JSON.stringify({
                   type: "ready",
-                  payload: {},
+                  payload: {
+                    sessionId: room.sessionId,
+                    participants: room.peers.map((peer) => peer.userId),
+                  },
                 })
               );
             }
@@ -111,9 +127,11 @@ wss.on("connection", (ws) => {
       // ================= RELAY =================
 
       if (
-        ["offer", "answer", "ice"].includes(type)
+        ["offer", "answer", "ice", "key_hello"].includes(type)
       ) {
-        const peers = rooms[roomId] || [];
+        const room = rooms[roomId];
+        if (!room || !data.sessionId || data.sessionId !== room.sessionId) return;
+        const peers = room.peers;
 
         console.log(
           `🔄 Relaying ${type} to ${
@@ -130,6 +148,7 @@ wss.on("connection", (ws) => {
               JSON.stringify({
                 type,
                 payload,
+                  sessionId: data.sessionId,
               })
             );
           }
@@ -156,15 +175,25 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    rooms[roomId] = rooms[roomId].filter(
+    const room = rooms[roomId];
+    room.peers = room.peers.filter(
       (client) => client !== ws
     );
+    if (!ws.replaced) room.sessionId = null;
 
     console.log(
-      `🚪 Client left room ${roomId} | Remaining: ${rooms[roomId].length}`
+      `🚪 ${ws.userId || "client"} left room ${roomId} | Remaining: ${room.peers.length}`
     );
 
-    if (rooms[roomId].length === 0) {
+    if (!ws.replaced) {
+      room.peers.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: "peer_left", payload: { userId: ws.userId } }));
+        }
+      });
+    }
+
+    if (room.peers.length === 0) {
       delete rooms[roomId];
 
       console.log(

@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.10.0 <4.0.0'
 
 dependencies:
   connectivity_plus: ^6.0.5
@@ -24,11 +24,10 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
 
-  # Encryption
-  encrypt: ^5.0.3
-
   # UUID generation
   uuid: ^4.3.3
+  cryptography: ^2.9.0
+  flutter_secure_storage: ^11.2.0
 
 dev_dependencies:
   flutter_test:

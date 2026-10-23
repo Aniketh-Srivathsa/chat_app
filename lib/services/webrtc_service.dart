@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../core/webrtc_config.dart';
-import '../core/encryption.dart';
 import 'signaling_service.dart';
 
 class WebRTCService {
@@ -14,7 +13,7 @@ class WebRTCService {
   bool isConnected = false;
   bool _isReconnecting = false;
   bool _reconnectScheduled = false; // ✅ REQUIRED
-
+  bool _isDisposing = false;
 
   bool? _lastIsCaller;
   final SignalingService signaling;
@@ -42,41 +41,30 @@ class WebRTCService {
     _peerConnection = await createPeerConnection(rtcConfiguration);
 
     _peerConnection!.onIceCandidate = (candidate) {
-  if (candidate != null) {
-    debugPrint("📤 SENDING ICE");
-    debugPrint(candidate.candidate);
+      debugPrint("📤 SENDING ICE");
+      debugPrint(candidate.candidate);
 
-    signaling.send(
-      'ice',
-      roomId,
-      candidate.toMap(),
-    );
-  }
-};
+      signaling.send(
+        'ice',
+        roomId,
+        candidate.toMap(),
+      );
+    };
 
     _peerConnection!.onIceConnectionState = (state) {
       debugPrint("🌐 ICE STATE: $state");
 
-      if (state ==
-        RTCIceConnectionState
-            .RTCIceConnectionStateDisconnected) {
+      if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
         debugPrint("⚠️ ICE temporarily disconnected");
       }
 
-      if (state ==
-        RTCIceConnectionState
-            .RTCIceConnectionStateFailed) {
-            debugPrint("❌ ICE FAILED");
-              _handleIceFailure();
+      if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        debugPrint("❌ ICE FAILED");
+        _handleIceFailure();
+      }
 
-          }
-
-      if (state ==
-              RTCIceConnectionState
-                  .RTCIceConnectionStateConnected ||
-          state ==
-              RTCIceConnectionState
-                  .RTCIceConnectionStateCompleted) {
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         debugPrint("✅ Connection RESTORED");
         isConnected = true;
       }
@@ -117,9 +105,7 @@ class WebRTCService {
     };
 
     _dataChannel!.onMessage = (message) {
-      final decrypted =
-          EncryptionHelper.decryptText(message.text);
-      onMessage(decrypted);
+      onMessage(message.text);
     };
   }
 
@@ -134,56 +120,56 @@ class WebRTCService {
   }
 
   Future<void> handleOffer(Map<String, dynamic> offer) async {
-  debugPrint("📥 OFFER RECEIVED");
+    debugPrint("📥 OFFER RECEIVED");
 
-  if (_peerConnection == null) return;
+    if (_peerConnection == null) return;
 
-  await _peerConnection!.setRemoteDescription(
-    RTCSessionDescription(offer['sdp'], offer['type']),
-  );
-
-  final answer = await _peerConnection!.createAnswer();
-  await _peerConnection!.setLocalDescription(answer);
-
-  debugPrint("📤 SENDING ANSWER");
-
-  signaling.send('answer', roomId, answer.toMap());
-}
-
-  Future<void> handleAnswer(Map<String, dynamic> answer) async {
-  debugPrint("📥 ANSWER RECEIVED");
-
-  if (_peerConnection == null) return;
-
-  await _peerConnection!.setRemoteDescription(
-    RTCSessionDescription(answer['sdp'], answer['type']),
-  );
-
-  debugPrint("✅ REMOTE DESCRIPTION SET");
-}
-
-  void handleIce(Map<String, dynamic> ice) async {
-  if (_peerConnection == null) {
-    debugPrint("❌ PeerConnection is null");
-    return;
-  }
-
-  debugPrint("📥 RECEIVED ICE");
-
-  try {
-    await _peerConnection!.addCandidate(
-      RTCIceCandidate(
-        ice['candidate'],
-        ice['sdpMid'],
-        ice['sdpMLineIndex'],
-      ),
+    await _peerConnection!.setRemoteDescription(
+      RTCSessionDescription(offer['sdp'], offer['type']),
     );
 
-    debugPrint("✅ ICE ADDED SUCCESSFULLY");
-  } catch (e) {
-    debugPrint("❌ ICE ADD FAILED: $e");
+    final answer = await _peerConnection!.createAnswer();
+    await _peerConnection!.setLocalDescription(answer);
+
+    debugPrint("📤 SENDING ANSWER");
+
+    signaling.send('answer', roomId, answer.toMap());
   }
-}
+
+  Future<void> handleAnswer(Map<String, dynamic> answer) async {
+    debugPrint("📥 ANSWER RECEIVED");
+
+    if (_peerConnection == null) return;
+
+    await _peerConnection!.setRemoteDescription(
+      RTCSessionDescription(answer['sdp'], answer['type']),
+    );
+
+    debugPrint("✅ REMOTE DESCRIPTION SET");
+  }
+
+  void handleIce(Map<String, dynamic> ice) async {
+    if (_peerConnection == null) {
+      debugPrint("❌ PeerConnection is null");
+      return;
+    }
+
+    debugPrint("📥 RECEIVED ICE");
+
+    try {
+      await _peerConnection!.addCandidate(
+        RTCIceCandidate(
+          ice['candidate'],
+          ice['sdpMid'],
+          ice['sdpMLineIndex'],
+        ),
+      );
+
+      debugPrint("✅ ICE ADDED SUCCESSFULLY");
+    } catch (e) {
+      debugPrint("❌ ICE ADD FAILED: $e");
+    }
+  }
 
   // ================= SEND MESSAGE =================
 
@@ -193,14 +179,19 @@ class WebRTCService {
       return;
     }
 
-    final encrypted =
-        EncryptionHelper.encryptText(message);
-    _dataChannel!.send(RTCDataChannelMessage(encrypted));
+    _dataChannel!.send(RTCDataChannelMessage(message));
+  }
+
+  Future<void> restart(bool isCaller) async {
+    await dispose();
+    await init(isCaller);
+    if (isCaller) await createOffer();
   }
 
   // ================= 🔥 ICE FAILURE HANDLING =================
 
   void _handleIceFailure() {
+    if (_isDisposing) return;
     if (_isReconnecting) return;
 
     debugPrint("❌ ICE FAILED — FORCING FULL RECONNECT");
@@ -211,70 +202,71 @@ class WebRTCService {
     attemptReconnect();
   }
 
- Future<void> attemptReconnect() async {
-  if (_isReconnecting || _reconnectScheduled) {
-    debugPrint("⏸ Reconnect already in progress — skipping");
-    return;
-  }
-
-  _reconnectScheduled = true;
-
-  // debounce window
-  await Future.delayed(const Duration(seconds: 2));
-
-  _reconnectScheduled = false;
-
-  if (_isReconnecting) return;
-
-  _isReconnecting = true;
-  debugPrint("🔄 FULL WebRTC reconnect started");
-
-  try {
-    // 🔥 Prevent crash if init() never ran
-    if (_lastIsCaller == null) {
-      debugPrint("⚠️ Reconnect skipped: role not initialized");
-      _isReconnecting = false;
+  Future<void> attemptReconnect() async {
+    if (_isReconnecting || _reconnectScheduled) {
+      debugPrint("⏸ Reconnect already in progress — skipping");
       return;
     }
 
-    await dispose();
+    _reconnectScheduled = true;
 
-    await init(_lastIsCaller!);
+    // debounce window
+    await Future.delayed(const Duration(seconds: 2));
 
-    // 🔥 ONLY CALLER CREATES OFFER
-    if (_lastIsCaller!) {
-      await createOffer();
+    _reconnectScheduled = false;
+
+    if (_isReconnecting) return;
+
+    _isReconnecting = true;
+    debugPrint("🔄 FULL WebRTC reconnect started");
+
+    try {
+      // 🔥 Prevent crash if init() never ran
+      if (_lastIsCaller == null) {
+        debugPrint("⚠️ Reconnect skipped: role not initialized");
+        _isReconnecting = false;
+        return;
+      }
+
+      await dispose();
+
+      await init(_lastIsCaller!);
+
+      // 🔥 ONLY CALLER CREATES OFFER
+      if (_lastIsCaller!) {
+        await createOffer();
+      }
+    } catch (e) {
+      debugPrint("❌ Reconnect error: $e");
     }
-  } catch (e) {
-    debugPrint("❌ Reconnect error: $e");
+
+    _isReconnecting = false;
   }
-
-  _isReconnecting = false;
-}
-
 
   // ================= CLEANUP =================
 
   Future<void> dispose() async {
-  debugPrint("❌ Disposing WebRTC");
+    debugPrint("❌ Disposing WebRTC");
 
-  _initialized = false;
-  isConnected = false;
-  _channelOpen = false;
+    _isDisposing = true;
+    _initialized = false;
+    isConnected = false;
+    _channelOpen = false;
 
-  try {
-    await _dataChannel?.close();
-  } catch (e) {
-    debugPrint("⚠️ DataChannel close ignored: $e");
+    try {
+      await _dataChannel?.close();
+    } catch (e) {
+      debugPrint("⚠️ DataChannel close ignored: $e");
+    }
+
+    try {
+      await _peerConnection?.close();
+    } catch (e) {
+      debugPrint("⚠️ PeerConnection close ignored: $e");
+    }
+
+    _dataChannel = null;
+    _peerConnection = null;
+    _isDisposing = false;
   }
-
-  try {
-    await _peerConnection?.close();
-  } catch (e) {
-    debugPrint("⚠️ PeerConnection close ignored: $e");
-  }
-
-  _dataChannel = null;
-  _peerConnection = null;
-}
 }

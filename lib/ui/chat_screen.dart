@@ -1,233 +1,291 @@
 import 'package:flutter/material.dart';
 
+import '../services/network_service.dart';
+import '../services/secure_session_service.dart';
 import '../services/signaling_service.dart';
 import '../services/webrtc_service.dart';
-import '../services/network_service.dart';
 
 class ChatScreen extends StatefulWidget {
-  final bool isCaller;
-  final String roomId;
+  final String localUserId;
+  final String peerUserId;
+  final String conversationId;
 
   const ChatScreen({
     super.key,
-    required this.isCaller,
-    required this.roomId,
+    required this.localUserId,
+    required this.peerUserId,
+    required this.conversationId,
   });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen>
-    with WidgetsBindingObserver {
-  final TextEditingController _controller = TextEditingController();
-
-  // UI messages
+class _ChatScreenState extends State<ChatScreen> {
+  final _controller = TextEditingController();
   final List<String> messages = [];
-
-  // 🔥 Outgoing queue (CRITICAL)
   final List<String> _outgoingQueue = [];
-
-  bool channelReady = false;
-
-  late final SignalingService signaling;
-  late final WebRTCService webrtc;
+  final signaling = SignalingService();
   late final NetworkService networkService;
+  late WebRTCService webrtc;
+  SecureSessionService? secureSession;
+  String? _sessionId;
+  String? _safetyCode;
+  bool channelReady = false;
+  bool _peerPresent = false;
+  bool _networkWasDisconnected = false;
+
+  bool get _isCaller => widget.localUserId.compareTo(widget.peerUserId) < 0;
+  bool get _secureAndVerified =>
+      secureSession?.hasSession == true && secureSession?.peerTrusted == true;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-
-    // 1️⃣ Signaling
-    signaling = SignalingService();
-
-    // 2️⃣ WebRTC
-    webrtc = WebRTCService(
-      signaling: signaling,
-      roomId: widget.roomId,
-      onMessage: (msg) {
-        if (!mounted) return;
-        setState(() {
-          messages.add("Her: $msg");
-        });
-      },
-      onChannelReady: (ready) {
-        if (!mounted) return;
-
-        setState(() {
-          channelReady = ready;
-        });
-
-        // 🔥 Try flushing whenever channel becomes ready
-        _tryFlushQueueSafely();
-      },
-    );
-
-    // 3️⃣ Network detection
-    networkService = NetworkService();
-    networkService.startListening(
-      onDisconnected: () {
-        debugPrint("📡 Network disconnected");
-      },
-      onConnected: () {
-  debugPrint("📶 Network connected");
-      },
-    );
-
-    // 4️⃣ Signaling server
+    webrtc = _createWebRtc();
+    networkService = NetworkService()
+      ..startListening(
+        onDisconnected: () {
+          _networkWasDisconnected = true;
+          _markDisconnected();
+        },
+        onConnected: () {
+          if (_networkWasDisconnected) {
+            _networkWasDisconnected = false;
+            _rejoinRoom();
+          }
+        },
+      );
     signaling.connect(
-      roomId: widget.roomId,
-      onMessage: (type, payload) async {
-        switch (type) {
-          case 'ready':
-            if (widget.isCaller) {
-              await webrtc.init(true);
-              await webrtc.createOffer();
-            }
-            break;
-
-          case 'offer':
-            await webrtc.init(false);
-            await webrtc.handleOffer(payload);
-            break;
-
-          case 'answer':
-            await webrtc.handleAnswer(payload);
-            break;
-
-          case 'ice':
-            webrtc.handleIce(payload);
-            break;
-        }
-      },
+      roomId: widget.conversationId,
+      userId: widget.localUserId,
+      onMessage: _handleSignal,
     );
   }
 
-  // ================= MESSAGE QUEUE =================
+  WebRTCService _createWebRtc() => WebRTCService(
+        signaling: signaling,
+        roomId: widget.conversationId,
+        onMessage: _receiveCiphertext,
+        onChannelReady: (ready) {
+          if (!mounted) return;
+          setState(() => channelReady = ready);
+          _tryFlushQueue();
+        },
+      );
 
-  void _sendOrQueue(String message) {
-    if (webrtc.isConnected && channelReady) {
-      webrtc.sendMessage(message);
+  Future<void> _handleSignal(String type, dynamic payload) async {
+    if (type == 'ready') {
+      final nextSession = payload['sessionId'] as String?;
+      if (nextSession == null || nextSession == _sessionId) {
+        return;
+      }
+      _sessionId = nextSession;
+      signaling.setSessionId(nextSession);
+      _peerPresent = true;
+      _safetyCode = null;
+      secureSession = SecureSessionService(
+        conversationId: widget.conversationId,
+        sessionId: nextSession,
+        localUserId: widget.localUserId,
+        peerUserId: widget.peerUserId,
+      );
+      await secureSession!.initialize();
+      signaling.send('key_hello', widget.conversationId, {
+        'sessionId': nextSession,
+        'hello': await secureSession!.createHello(),
+      });
+      if (_isCaller) {
+        await webrtc.restart(true);
+      } else {
+        await webrtc.restart(false);
+      }
+      if (mounted) setState(() {});
+      return;
+    }
+
+    if (type == 'peer_left') {
+      _peerPresent = false;
+      _markDisconnected();
+      return;
+    }
+    if (type == 'key_hello') {
+      if (payload['__sessionId'] != _sessionId ||
+          payload['sessionId'] != _sessionId ||
+          secureSession == null) {
+        return;
+      }
+      try {
+        final code = await secureSession!.acceptHello(
+          Map<String, dynamic>.from(payload['hello'] as Map),
+        );
+        if (!mounted) return;
+        setState(() {
+          _safetyCode = code;
+        });
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Secure setup failed: $error')),
+        );
+      }
+      return;
+    }
+    if (_sessionId == null ||
+        payload is! Map ||
+        payload['__sessionId'] != _sessionId) {
+      return;
+    }
+    switch (type) {
+      case 'offer':
+        await webrtc.init(false);
+        await webrtc.handleOffer(Map<String, dynamic>.from(payload));
+        break;
+      case 'answer':
+        await webrtc.handleAnswer(Map<String, dynamic>.from(payload));
+        break;
+      case 'ice':
+        webrtc.handleIce(Map<String, dynamic>.from(payload));
+        break;
+    }
+  }
+
+  Future<void> _receiveCiphertext(String ciphertext) async {
+    try {
+      final plaintext = await secureSession!.decrypt(ciphertext);
+      if (!mounted) return;
+      setState(() => messages.add('Peer: $plaintext'));
+    } catch (error) {
+      debugPrint('Rejected chat frame: $error');
+    }
+  }
+
+  void _markDisconnected() {
+    if (!mounted) return;
+    signaling.setSessionId(null);
+    setState(() {
+      channelReady = false;
+      secureSession = null;
+      _safetyCode = null;
+    });
+  }
+
+  void _rejoinRoom() {
+    if (!mounted) return;
+    signaling.reconnectNow(force: true);
+  }
+
+  Future<void> _verifyPeer() async {
+    final session = secureSession;
+    if (session == null || _safetyCode == null) return;
+    await session.trustPeer();
+    if (!mounted) return;
+    _tryFlushQueue();
+  }
+
+  Future<void> _sendOrQueue(String plaintext) async {
+    if (_secureAndVerified && webrtc.isConnected && channelReady) {
+      final ciphertext = await secureSession!.encrypt(plaintext);
+      webrtc.sendMessage(ciphertext);
     } else {
-      debugPrint("📥 Queued message (offline): $message");
-      _outgoingQueue.add(message);
+      _outgoingQueue.add(plaintext);
     }
+    if (mounted) setState(() => messages.add('Me: $plaintext'));
   }
 
-  void _tryFlushQueueSafely() {
-    if (!webrtc.isConnected) return;
-    if (_outgoingQueue.isEmpty) return;
-
-    debugPrint("📤 Flushing queued messages: ${_outgoingQueue.length}");
-
-    for (final msg in _outgoingQueue) {
-      webrtc.sendMessage(msg);
+  Future<void> _tryFlushQueue() async {
+    if (!_secureAndVerified || !webrtc.isConnected || !channelReady) return;
+    while (_outgoingQueue.isNotEmpty) {
+      final plaintext = _outgoingQueue.removeAt(0);
+      webrtc.sendMessage(await secureSession!.encrypt(plaintext));
     }
-
-    _outgoingQueue.clear();
   }
-
-  // ================= LIFECYCLE =================
-
-  
-
-  // ================= CLEANUP =================
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-
     networkService.dispose();
     _controller.dispose();
     signaling.dispose();
     webrtc.dispose();
-
     super.dispose();
   }
 
-  // ================= UI =================
-
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          channelReady
-              ? "Couple Chat (Connected)"
-              : "Reconnecting…",
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          title: Text('${widget.localUserId} ↔ ${widget.peerUserId}'),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(28),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(_secureAndVerified
+                  ? (channelReady ? 'Verified secure session' : 'Reconnecting')
+                  : (_peerPresent
+                      ? 'Verifying secure session…'
+                      : 'Waiting for peer')),
+            ),
+          ),
         ),
-        centerTitle: true,
-      ),
-      body: Column(
-        children: [
-          // Messages
+        body: Column(children: [
+          if (_safetyCode != null && !_secureAndVerified)
+            Card(
+              margin: const EdgeInsets.all(12),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(children: [
+                  const Text(
+                      'Compare this safety code with your peer in person or over a trusted channel.'),
+                  const SizedBox(height: 8),
+                  SelectableText(_safetyCode!.replaceAllMapped(
+                    RegExp(r'.{4}'),
+                    (match) => '${match.group(0)} ',
+                  )),
+                  TextButton(
+                      onPressed: _verifyPeer,
+                      child: const Text('Codes match — verify peer')),
+                ]),
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(8),
               itemCount: messages.length,
-              itemBuilder: (context, index) {
-                final isMe =
-                    messages[index].startsWith("Me:");
-                return Align(
-                  alignment: isMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Container(
-                    margin:
-                        const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isMe
-                          ? Colors.blue.shade100
-                          : Colors.pink.shade100,
-                      borderRadius:
-                          BorderRadius.circular(10),
-                    ),
-                    child: Text(messages[index]),
+              itemBuilder: (context, index) => Align(
+                alignment: messages[index].startsWith('Me:')
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
+                child: Container(
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: messages[index].startsWith('Me:')
+                        ? Colors.blue.shade100
+                        : Colors.pink.shade100,
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                );
-              },
+                  child: Text(messages[index]),
+                ),
+              ),
             ),
           ),
-
-          // Input
           SafeArea(
-            child: Row(
-              children: [
-                Expanded(
+            child: Row(children: [
+              Expanded(
                   child: TextField(
-                    controller: _controller,
-                    enabled: true, // allow typing anytime
-                    decoration: const InputDecoration(
-                      hintText: "Type a message…",
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 12),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  color: Colors.blue,
-                  onPressed: () {
-                    final text =
-                        _controller.text.trim();
-                    if (text.isEmpty) return;
-
-                    _sendOrQueue(text);
-
-                    setState(() {
-                      messages.add("Me: $text");
-                    });
-
-                    _controller.clear();
-                  },
-                ),
-              ],
-            ),
+                controller: _controller,
+                decoration: const InputDecoration(hintText: 'Type a message…'),
+              )),
+              IconButton(
+                icon: const Icon(Icons.send),
+                onPressed: () {
+                  final text = _controller.text.trim();
+                  if (text.isEmpty) return;
+                  _controller.clear();
+                  _sendOrQueue(text);
+                },
+              ),
+            ]),
           ),
-        ],
-      ),
-    );
-  }
+        ]),
+      );
 }
